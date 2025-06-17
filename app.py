@@ -126,8 +126,17 @@ def add_recommendation():
     return jsonify({"message": "Recommendation added"})
 
 
+#本地测试使用
+# if __name__ == "__main__":
+#     if not os.path.exists(DB_PATH):
+#         print("⛔ 数据库不存在，请先运行 fetcher.py 抓取并初始化数据库")
+#     else:
+#         app.run(debug=True)
+
+#部署使用
 if __name__ == "__main__":
     if not os.path.exists(DB_PATH):
         print("⛔ 数据库不存在，请先运行 fetcher.py 抓取并初始化数据库")
     else:
-        app.run(debug=True)
+        port = int(os.environ.get("PORT", 10000))  # Render 会设置这个环境变量
+        app.run(host="0.0.0.0", port=port)
