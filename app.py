@@ -6,10 +6,16 @@ import sqlite3
 from datetime import datetime
 import os
 
-app = Flask(__name__, static_folder="../frontend", static_url_path="")
+#本地测试使用
+# app = Flask(__name__, static_folder="../frontend", static_url_path="")
+
+#部署使用
+app = Flask(__name__)
 CORS(app)
 
-DB_PATH = "backend/data.db"
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.path.join(BASE_DIR, 'data.db')
 
 @app.route("/")
 def index():

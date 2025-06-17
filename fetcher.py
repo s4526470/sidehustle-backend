@@ -5,7 +5,6 @@ import os
 
 from database import init_db, save_posts_to_db, get_existing_urls
 
-os.makedirs("backend", exist_ok=True)
 
 def format_time(timestamp):
     if isinstance(timestamp, (int, float)):

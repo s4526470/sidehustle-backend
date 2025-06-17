@@ -3,8 +3,11 @@
 import sqlite3
 import random
 from datetime import datetime
+import os
 
-DB_PATH = "backend/data.db"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.path.join(BASE_DIR, 'data.db')
+
 
 def generate_recommendation():
     today = datetime.now().date().isoformat()
