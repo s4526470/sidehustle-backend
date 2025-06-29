@@ -1,56 +1,54 @@
 # backend/generate_recommendation.py
 
-import sqlite3
 import random
-from datetime import datetime
-import os
-
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(BASE_DIR, 'data.db')
+from datetime import datetime, timedelta
+from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError
+from database import SessionLocal,Post, Recommendation,Base
 
 
 def generate_recommendation():
-    today = datetime.now().date().isoformat()
+    session: Session = SessionLocal()
+    today = datetime.now().date()
 
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    c = conn.cursor()
+    try:
+        # 检查今天是否已经生成推荐
+        existing = session.query(Recommendation).filter(Recommendation.date == today).count()
+        if existing > 0:
+            print("Today's recommendations already generated.")
+            return
 
-    # 检查今天是否已经有推荐，避免重复插入
-    c.execute("SELECT COUNT(*) FROM recommendations WHERE date = ?", (today,))
-    if c.fetchone()[0] > 0:
-        print("Today’s recommendations already generated.")
-        conn.close()
-        return
+        # 获取最近两天内的帖子
+        two_days_ago = datetime.now() - timedelta(days=2)
+        recent_posts = session.query(Post).filter(Post.created_utc >= two_days_ago).all()
 
-    # 获取最近两天内的帖子
-    c.execute("""
-        SELECT title, url FROM posts
-        WHERE datetime(created_utc) >= datetime('now', '-2 day')
-    """)
-    posts = c.fetchall()
-    if not posts:
-        print("No recent posts found.")
-        conn.close()
-        return
+        if not recent_posts:
+            print("No recent posts found.")
+            return
 
-    # 随机选取最多5个推荐
-    sampled = random.sample(posts, min(5, len(posts)))
+        # 随机选取最多5个推荐
+        sampled = random.sample(recent_posts, min(5, len(recent_posts)))
 
-    inserted_count = 0
-    for post in sampled:
-        try:
-            c.execute("""
-                INSERT INTO recommendations (title, url, date)
-                VALUES (?, ?, ?)
-            """, (post["title"], post["url"], today))
-            inserted_count += 1
-        except sqlite3.IntegrityError:
-            print(f"Skipped duplicate for {post['title']}")
+        inserted_count = 0
+        for post in sampled:
+            try:
+                recommendation = Recommendation(
+                    title=post.title,
+                    url=post.url,
+                    date=today
+                )
+                session.add(recommendation)
+                inserted_count += 1
+            except IntegrityError:
+                session.rollback()
+                print(f"Skipped duplicate for {post.title}")
 
-    conn.commit()
-    conn.close()
-    print(f"Generated {inserted_count} recommendations for {today}.")
+        session.commit()
+        print(f"Generated {inserted_count} recommendations for {today}.")
+
+    finally:
+        session.close()
+
 
 if __name__ == "__main__":
     generate_recommendation()

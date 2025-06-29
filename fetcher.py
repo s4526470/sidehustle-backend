@@ -1,10 +1,17 @@
 import requests
 import feedparser
 import time
+
+from database import get_existing_urls, save_posts_to_db, Post, Recommendation, SessionLocal,Base,engine
+from sqlalchemy.orm import Session
+from sqlalchemy import create_engine
 import os
 
-from database import init_db, save_posts_to_db, get_existing_urls
+# 从环境变量读取数据库 URL
+DATABASE_URL = os.getenv("DATABASE_URL")
 
+# 创建数据库引擎和会话
+engine = create_engine(DATABASE_URL)
 
 def format_time(timestamp):
     if isinstance(timestamp, (int, float)):
@@ -18,15 +25,12 @@ def fetch_reddit_posts(limit=10):
     print("🔍 Fetching Reddit...")
     url = "https://www.reddit.com/r/sidehustle/new.json"
     headers = {"User-Agent": "Mozilla/5.0 (compatible; SideHustleBot/1.0)"}
-
     try:
         response = requests.get(url, headers=headers, timeout=10)
         response.raise_for_status()
         data = response.json()
-
         posts = []
-        children = data.get("data", {}).get("children", [])
-        for item in children[:limit]:
+        for item in data.get("data", {}).get("children", [])[:limit]:
             post = item.get("data", {})
             posts.append({
                 "title": post.get("title"),
@@ -35,7 +39,6 @@ def fetch_reddit_posts(limit=10):
                 "source": normalize_source("Reddit")
             })
         return posts
-
     except Exception as e:
         print("❌ Reddit fetch error:", e)
         return []
@@ -129,6 +132,7 @@ def gather_all_posts():
     posts += fetch_medium_rss(limit=5)
     posts += fetch_hackernews_posts(limit=5)
     posts += fetch_remoteok_posts(limit=5)
+
     rss_sources = [
         {"url": "https://www.sidehustlenation.com/feed/", "name": "Side Hustle Nation"},
         {"url": "https://www.smartpassiveincome.com/blog/rss/", "name": "Smart Passive Income"},
@@ -141,20 +145,19 @@ def gather_all_posts():
     return posts
 
 if __name__ == "__main__":
-    print("📥 初始化数据库...")
-    init_db()
-
     print("🌐 正在抓取所有副业资讯...")
     all_posts = gather_all_posts()
     print(f"📦 抓取完成，总数：{len(all_posts)} 条")
 
     print("🔍 正在检查并去除已存在的帖子...")
-    existing_urls = get_existing_urls()
-    new_posts = [post for post in all_posts if post["url"] not in existing_urls]
 
-    print(f"🆕 新帖子数量：{len(new_posts)} 条")
-    if new_posts:
-        save_posts_to_db(new_posts)
-        print("✅ 新帖子已保存到数据库")
-    else:
-        print("ℹ️ 没有新帖子，无需保存")
+    with Session(engine) as db:
+        existing_urls = get_existing_urls(db)
+        new_posts = [post for post in all_posts if post["url"] not in existing_urls]
+
+        print(f"🆕 新帖子数量：{len(new_posts)} 条")
+        if new_posts:
+            save_posts_to_db(db, new_posts)
+            print("✅ 新帖子已保存到数据库")
+        else:
+            print("ℹ️ 没有新帖子，无需保存")

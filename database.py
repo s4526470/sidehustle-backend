@@ -1,90 +1,159 @@
 # backend/database.py
 
-import sqlite3
 import os
+from dotenv import load_dotenv
+from datetime import datetime, date
+from sqlalchemy import create_engine, Column, Integer, String, Text, func
+from sqlalchemy.orm import sessionmaker, declarative_base, Session
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.sql import or_
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH = os.path.join(BASE_DIR, 'data.db')
+# 载入环境变量
+load_dotenv()
+DATABASE_URL = os.getenv("DATABASE_URL")
+print("连接地址:", DATABASE_URL)
 
+# 初始化数据库连接和会话
+engine = create_engine(DATABASE_URL)
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
+
+# -------------------- 模型定义 --------------------
+
+class Post(Base):
+    __tablename__ = "posts"
+
+    id = Column(Integer, primary_key=True, index=True)
+    title = Column(Text, nullable=False)
+    url = Column(Text, unique=True, nullable=False)
+    created_utc = Column(String)  # ISO 格式字符串
+    source = Column(String)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "title": self.title,
+            "url": self.url,
+            "created_utc": self.created_utc,
+            "source": self.source
+        }
+
+class Recommendation(Base):
+    __tablename__ = "recommendations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    title = Column(Text, nullable=False)
+    url = Column(Text)
+    date = Column(String, unique=True, nullable=False)  # 格式: 'YYYY-MM-DD'
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "title": self.title,
+            "url": self.url,
+            "date": self.date
+        }
+
+# -------------------- 初始化表 --------------------
 
 def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS posts (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            title TEXT,
-            url TEXT UNIQUE,
-            created_utc TEXT,
-            source TEXT
-        )
-    ''')
+    Base.metadata.create_all(bind=engine)
 
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS recommendations (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            title TEXT NOT NULL,
-            url TEXT,
-            date TEXT NOT NULL UNIQUE
-        )
-    """)
-    conn.commit()
-    conn.close()
+# -------------------- Post 相关操作 --------------------
 
-def save_posts_to_db(posts):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    for post in posts:
-        try:
-            c.execute('''
-                INSERT INTO posts (title, url, created_utc, source)
-                VALUES (?, ?, ?, ?)
-            ''', (
-                post.get("title"),
-                post.get("url"),
-                post.get("created_utc"),
-                post.get("source")
-            ))
-        except sqlite3.IntegrityError:
-            # URL 已存在，不插入
-            continue
-    conn.commit()
-    conn.close()
+def save_posts_to_db(db: Session, posts):
+    try:
+        for post in posts:
+            # 确保在这里创建的 Post 对象与表的字段匹配
+            new_post = Post(
+                title=post.get("title"),
+                url=post.get("url"),
+                created_utc=post.get("created_utc"),
+                source=post.get("source")
+            )
+            db.add(new_post)  # 将数据添加到 session
+
+        db.commit()  # 提交事务
+        print(f"Successfully added {len(posts)} posts.")  # 记录成功的帖子数量
+
+    except IntegrityError as e:
+        db.rollback()  # 如果有重复数据等问题，则回滚事务
+        print(f"Error inserting posts: {e}")
+    except Exception as e:
+        db.rollback()  # 捕获其它异常并回滚
+        print(f"Unexpected error: {e}")
+    finally:
+        db.close()  # 确保最终关闭数据库连接
+
+
 
 def query_posts(page=1, limit=10, search="", source_filter=""):
-    offset = (page - 1) * limit
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    c = conn.cursor()
+    session = SessionLocal()
+    try:
+        query = session.query(Post)
 
-    query = "SELECT * FROM posts WHERE 1=1"
-    params = []
+        if search:
+            search = search.lower()
+            query = query.filter(
+                or_(
+                    func.lower(Post.title).like(f"%{search}%"),
+                    func.lower(Post.source).like(f"%{search}%")
+                )
+            )
 
-    if search:
-        query += " AND (LOWER(title) LIKE ? OR LOWER(source) LIKE ?)"
-        params += [f"%{search}%", f"%{search}%"]
+        if source_filter:
+            query = query.filter(func.lower(Post.source) == source_filter.lower())
 
-    if source_filter:
-        query += " AND LOWER(source) = ?"
-        params.append(source_filter)
+        total = query.count()
 
-    count_query = f"SELECT COUNT(*) FROM ({query})"
-    c.execute(count_query, params)
-    total = c.fetchone()[0]
+        posts = query.order_by(Post.created_utc.desc() if Post.created_utc else Post.id.desc()) \
+                     .offset((page - 1) * limit).limit(limit).all()
 
-    query += " ORDER BY datetime(created_utc) DESC LIMIT ? OFFSET ?"
-    params += [limit, offset]
-    c.execute(query, params)
-    rows = c.fetchall()
-    conn.close()
+        results = [p.to_dict() for p in posts]
 
-    posts = [dict(row) for row in rows]
-    return posts, total
+        return results, total
+    finally:
+        session.close()
 
-def get_existing_urls():
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT url FROM posts")
-    rows = c.fetchall()
-    conn.close()
-    return set(row[0] for row in rows)
+def get_existing_urls(db: Session):
+    urls = db.query(Post.url).all()
+    return set(url for (url,) in urls)
+
+
+def get_latest_post_time():
+    """获取最新帖子的 created_utc（字符串格式），用于增量抓取"""
+    session = SessionLocal()
+    try:
+        latest_post = session.query(Post).order_by(Post.created_utc.desc()).first()
+        return latest_post.created_utc if latest_post else None
+    finally:
+        session.close()
+
+# -------------------- Recommendation 相关操作 --------------------
+
+def get_today_recommendation(target_date=None):
+    """获取某天的推荐（默认为今天）"""
+    session = SessionLocal()
+    if target_date is None:
+        target_date = date.today().isoformat()
+    try:
+        rec = session.query(Recommendation).filter(Recommendation.date == target_date).first()
+        return rec.to_dict() if rec else None
+    finally:
+        session.close()
+
+def add_recommendation(title, url, date_str=None):
+    """添加推荐（默认使用今天的日期）"""
+    session = SessionLocal()
+    if date_str is None:
+        date_str = date.today().isoformat()
+    try:
+        recommendation = Recommendation(title=title, url=url, date=date_str)
+        session.add(recommendation)
+        session.commit()
+        return True
+    except IntegrityError:
+        session.rollback()
+        return False
+    finally:
+        session.close()
