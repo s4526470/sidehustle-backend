@@ -7,12 +7,6 @@ from sqlalchemy.orm import Session
 from sqlalchemy import create_engine
 import os
 
-# 从环境变量读取数据库 URL
-DATABASE_URL = os.getenv("DATABASE_URL")
-
-# 创建数据库引擎和会话
-engine = create_engine(DATABASE_URL)
-
 def format_time(timestamp):
     if isinstance(timestamp, (int, float)):
         return time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(timestamp))
@@ -150,14 +144,13 @@ if __name__ == "__main__":
     print(f"📦 抓取完成，总数：{len(all_posts)} 条")
 
     print("🔍 正在检查并去除已存在的帖子...")
+    existing_urls = get_existing_urls()  # ✅ 不用再传 db
 
-    with Session(engine) as db:
-        existing_urls = get_existing_urls(db)
-        new_posts = [post for post in all_posts if post["url"] not in existing_urls]
+    new_posts = [post for post in all_posts if post["url"] not in existing_urls]
 
-        print(f"🆕 新帖子数量：{len(new_posts)} 条")
-        if new_posts:
-            save_posts_to_db(db, new_posts)
-            print("✅ 新帖子已保存到数据库")
-        else:
-            print("ℹ️ 没有新帖子，无需保存")
+    print(f"🆕 新帖子数量：{len(new_posts)} 条")
+    if new_posts:
+        save_posts_to_db(new_posts)  # ✅ 不用再传 db
+        print("✅ 新帖子已保存到数据库")
+    else:
+        print("ℹ️ 没有新帖子，无需保存")
