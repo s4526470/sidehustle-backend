@@ -14,7 +14,14 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 print("连接地址:", DATABASE_URL)
 
 # 初始化数据库连接和会话
-engine = create_engine(DATABASE_URL)
+# 设置连接池的大小和最大溢出数
+engine = create_engine(
+    DATABASE_URL,
+    pool_size=10,  # 连接池大小
+    max_overflow=20,  # 最大溢出连接数
+    pool_timeout=30,  # 连接超时限制
+    pool_recycle=3600  # 连接池连接的最大使用时间
+)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
@@ -61,35 +68,31 @@ def init_db():
 
 # -------------------- Post 相关操作 --------------------
 
-def save_posts_to_db(db: Session, posts):
-    try:
-        for post in posts:
-            # 确保在这里创建的 Post 对象与表的字段匹配
-            new_post = Post(
-                title=post.get("title"),
-                url=post.get("url"),
-                created_utc=post.get("created_utc"),
-                source=post.get("source")
-            )
-            db.add(new_post)  # 将数据添加到 session
-
-        db.commit()  # 提交事务
-        print(f"Successfully added {len(posts)} posts.")  # 记录成功的帖子数量
-
-    except IntegrityError as e:
-        db.rollback()  # 如果有重复数据等问题，则回滚事务
-        print(f"Error inserting posts: {e}")
-    except Exception as e:
-        db.rollback()  # 捕获其它异常并回滚
-        print(f"Unexpected error: {e}")
-    finally:
-        db.close()  # 确保最终关闭数据库连接
-
-
+def save_posts_to_db(posts):
+    # 使用 with 语句自动管理 session
+    with SessionLocal() as db:
+        try:
+            for post in posts:
+                new_post = Post(
+                    title=post.get("title"),
+                    url=post.get("url"),
+                    created_utc=post.get("created_utc"),
+                    source=post.get("source")
+                )
+                db.add(new_post)
+            db.commit()
+            print(f"Successfully added {len(posts)} posts.")
+        except IntegrityError as e:
+            db.rollback()  # 如果有重复数据等问题，回滚事务
+            print(f"Error inserting posts: {e}")
+        except Exception as e:
+            db.rollback()  # 捕获其它异常并回滚
+            print(f"Unexpected error: {e}")
+        # 由于使用了 with 语句，db 会自动关闭
 
 def query_posts(page=1, limit=10, search="", source_filter=""):
-    session = SessionLocal()
-    try:
+    # 使用 with 语句管理会话
+    with SessionLocal() as session:
         query = session.query(Post)
 
         if search:
@@ -110,24 +113,21 @@ def query_posts(page=1, limit=10, search="", source_filter=""):
                      .offset((page - 1) * limit).limit(limit).all()
 
         results = [p.to_dict() for p in posts]
-
         return results, total
-    finally:
-        session.close()
 
-def get_existing_urls(db: Session):
-    urls = db.query(Post.url).all()
-    return set(url for (url,) in urls)
-
+def get_existing_urls():
+    # 使用 with 语句管理会话
+    with SessionLocal() as db:
+        urls = db.query(Post.url).all()
+        return set(url for (url,) in urls)
 
 def get_latest_post_time():
     """获取最新帖子的 created_utc（字符串格式），用于增量抓取"""
-    session = SessionLocal()
-    try:
+    # 使用 with 语句管理会话
+    with SessionLocal() as session:
         latest_post = session.query(Post).order_by(Post.created_utc.desc()).first()
         return latest_post.created_utc if latest_post else None
-    finally:
-        session.close()
+
 
 # -------------------- Recommendation 相关操作 --------------------
 
